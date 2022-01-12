@@ -1,0 +1,354 @@
+---
+title: "Movielens report"
+author: "Deeksha RV"
+date: "1/4/2022"
+output:
+  pdf_document: 
+    number_sections: yes
+    toc: yes
+---
+# **Abstract:**      
+The following report entails details on a data science project that I took up as part of the *HarvardX PH125.9x
+Data Science: Capstone* final course, about creating a machine learning algorithm for a movie recommendation system. The algorithm is expected to have an RMSE value of 0.86490 or lesser, implying good accuracy. The creation of this algorithm was originally tasked to data scientists across the globe, as part of the Netflix Challenge 2006. The dataset used for this analysis was the 10M version of the Movielens dataset, the links of which were accessed directly from the edx course. The given dataset was split into 2 sub-datasets called the __edx__ and **validation** sets. The **edx** set was further sub-divided into the test and training sets and the algorithm was built on these datasets accordingly. Finally, the final model was tested on the validation dataset and its RMSE was recorded.    
+
+\newpage
+
+# **Introduction:**  
+A Movie recommendation System is a filtration program whose prime goal is to predict the “rating” or “preference” of a user towards a movie. Therefore the main focus of a recommendation system is to filter and predict only those movies which a user would prefer given some data about the user himself/herself.  
+In general, recommendation systems use Machine Learning to understand a user's preferences. Items are ranked according to their relevancy, and the most relevant ones are shown to the user. A recommendation system continuously improves itself as the user progressively makes decisions on various domains. The same can be applied for a movie recommendation system, which becomes progressively better when users choose movies over a broad range, and make a lot of ratings. In today's world, lots of industries use recommendation systems to create business-oriented decisions. To name a few, we have _Netflix_, the popular streaming service for movies and other shows of varied genres and languages, _Amazon_, another widely used application that helps users make suitable choices based on their shopping history, and other e-commerce companies.  
+
+Every algorithm that is built needs to be tested on some data before it can be used commercially. A popular method for evaluating the accuracy of an algorithm is the **Root Mean Square Method** or simply, **RMSE**. In R, a function called RMSE() is provided in the _caret_ package that takes true values and predicted values as input, and generates an output score, whose value determines the accuracy of the algorithm. RMSE is commonly used in supervised learning applications.  
+
+$$
+RMSE = \sqrt{\frac{\sum_{i = 1}^{N}{(true_i - \hat{predicted_i})^2}}{N}}
+$$
+
+where  
+N is the total number of observations  
+
+\newpage    
+
+# __Workflow of Project__  
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+knitr::include_graphics("C:/Users/hp/Downloads/flowchart movielens.png", error = FALSE)
+```
+
+\newpage  
+
+
+# __Data Analysis and Cleaning__  
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+
+colnames(movies) <- c("movieId", "title", "genres")
+
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") 
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+# Retain only edx and validation datasets
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+```
+
+To start with, lets view the dataset that we will primarily work with:
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+head(edx) %>% knitr::kable()
+```
+The above shown table shows the first 6 rows of the edx dataset, along with all the variables.  
+
+We will now play around with the variables, to see how each relates to the other. We start with finding out how rating is spread across the dataset:  
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(tidyverse)
+edx %>% ggplot(aes(rating)) + geom_histogram(fill = "green")
+
+```
+From the given histogram, we can observe that 4 is the most popular rating given to movies in the edx dataset. Also, comparing the type of ratings, we observe that users prefer to give movies more whole-star ratings than half-star ratings.  
+
+Next, we see that the genres describing each movie are a mix; for example, the first movie in the above shown edx dataset table is "Boomerang(1992)", which has been put under a mixed genre of "Comedy" and "Romance". Similarly, some other movies such as "Star Trek: Generations(1994)" fall under a wider variety of genres such as "Action", "Adventure", "Sci-Fi" as well as "Drama". We now find out all the unique genres that describe every movie:  
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(stringr)
+str_extract_all(unique(edx$genres), "[^|]+") %>%
+  unlist() %>%
+  unique()
+
+```
+As we can see, 20 unique genres exist in total.  
+
+We now find out how each unique genre has been rated. The following list contains how many ratings each genre has:    
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+unique_genres <- c("Comedy", "Romance", "Action","Crime","Thriller","Drama","Sci-Fi", "Adventure","Children","Fantasy","War","Animation","Musical","Western","Mystery","Film-Noir","Horror","Documentary","IMAX","(no genres listed)")
+sapply(unique_genres, function(g) {
+       sum(str_detect(edx$genres, g))
+     })
+
+```
+As it can be seen, "Drama" and "Comedy" have been rated the most, whereas "IMAX" has been rated the least, along with a few movies for which no genre has been listed.  
+
+Next we would like to know a bit about the users. There are totally 69,878 users who have rated movies in the edx dataset. Out of this, we can find out how many movies each user has given say, 5 stars to:  
+```{r, message=FALSE, warning= FALSE, echo=FALSE}
+rating_as5 <- edx %>% group_by(userId) %>% summarise(movies = sum(rating == 5)) %>% head(.,20)
+rating_as5
+
+
+```
+We see from an example of the first 20 users, that each user's perspective of rating 5 stars to movies is different. To visualize this better:    
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(ggplot2)
+ggplot() + geom_line(aes(x = userId, y = movies),
+                 data = rating_as5)
+```
+As we can see, people's opinions on what movie deserves a perfect rating, is very diverse. Hence our algorithm must be structured in such a way that it takes every user's choices into account.  
+
+\newpage
+
+# __Building the Algorithm__  
+In order to build the algorithm, the first step is to split our existing data into 2 subsets; the edx _train_ set and the edx _test_ set. We will train our algorithm on the _train_ set and test its accuracy on the _test_ set.    
+
+```{r, message=FALSE, warning=FALSE, echo= FALSE}
+library(caret)
+edx_test_index <- createDataPartition(edx$rating, times = 1, p = 0.5, list = FALSE)
+edx_test_set <- edx[edx_test_index, ]
+edx_train_set <- edx[-edx_test_index, ]
+
+```
+
+To start with, we create a baseline model; a simple model that predicts same rating for all movies regardless of user. Model is given in the form of a regression equation, taking Y as dependant variable, X as independent variable, $\beta$ (beta) as parameter and $\epsilon$ (epsilon) as error:    
+Y = f(X,$\beta$) + $\epsilon$  
+We could further simplify this equation into:  
+Y = $\mu$ + $\epsilon$  
+where Y is predicted rating and $\mu$ is actual rating, given by average of all ratings in edx dataset. We get $\mu$ to be 3.512 approximately.  
+
+We can now evaluate this model, by finding its RMSE after calling upon the _caret_ package. This is the result we get:  
+```{r, message=FALSE, warning= FALSE, echo= FALSE}
+library(knitr)
+mu <- mean(edx_train_set$rating)
+rmse1 <- RMSE(edx_train_set$rating, mu)
+options(pillar.sigfig = 7)
+results_table <- tibble(Model = "Average rating only", RMSE = rmse1) 
+results_table %>% knitr::kable()
+
+```
+This is just a start. As we further build the model, we will try to implement parameters through trial-and-error method to lower this RMSE value.  
+
+We will now take the more obvious parameter from the edx dataset; the _movieId_, and see how including it, will affect the accuracy of this model:    
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+movie_effect <- edx_train_set %>% 
+                group_by(movieId) %>%
+               summarise(b_m = mean(rating - mu))
+
+pred_movie <- mu + edx_test_set %>%
+         left_join(movie_effect, by = "movieId") %>%
+         pull(b_m)
+
+rmse2 <- RMSE(pred_movie, edx_test_set$rating, na.rm = TRUE)
+
+results_table <- bind_rows(results_table, tibble(Model = "Movie model", RMSE = rmse2))
+results_table %>% knitr::kable()
+
+
+```
+As we can see, the RMSE has tremendously lowered, implying a positive effect of the movieId on the model. This means that a user's rating of a movie depends on what movie it is; such as its title.  
+
+We can further improve the model by bringing another parameter, such as the _userId_:  
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+user_effect <- edx_train_set %>%
+                left_join(movie_effect, by = "movieId") %>%
+                group_by(userId) %>%
+                summarise(b_u = mean(rating - mu - b_m))
+
+pred_user <- edx_test_set %>%
+              left_join(movie_effect, by = "movieId") %>%
+              left_join(user_effect, by = "userId") %>%
+              mutate(value = mu + b_m + b_u) %>%
+              pull(value)
+
+rmse3 <- RMSE(pred_user, edx_test_set$rating, na.rm = TRUE)
+results_table <- results_table %>% bind_rows(tibble(Model = "Movie + User", RMSE = rmse3))
+results_table %>% knitr::kable()
+
+```
+So what does this new lowered value of RMSE tell us ? It shows us that the _userId_ has also had a positive effect on the model. The rating predicted by this model depends on which user has given what kind of ratings. But it can also be observed from the difference in RMSE values of the first and second models (0.116), and second and third respectively (0.07), that the _movieID_ has a greater positive effect, than does the _userId_.  
+
+We would now like to see if the type of genre, has an effect on the rating predicted by our model. For this, we include the _Genres_ effect into the model and calculate the its RMSE accordingly.    
+
+```{r, message= FALSE, warning= FALSE, echo= FALSE}
+
+genres_effect <- edx_train_set %>%
+                left_join(movie_effect, by = "movieId") %>%
+                left_join(user_effect, by = "userId") %>%
+                group_by(genres) %>%
+                summarise(b_g = mean(rating - mu - b_m - b_u))
+
+pred_genres <- edx_test_set %>%
+               left_join(movie_effect, by = "movieId") %>%
+               left_join(user_effect, by = "userId") %>%
+               left_join(genres_effect, by = "genres") %>%
+               mutate(value = mu + b_m + b_u + b_g) %>%
+               pull(value)
+  
+rmse4 <- RMSE(pred_genres, edx_test_set$rating, na.rm = TRUE)
+
+results_table <- results_table %>% bind_rows(tibble(Model = "Movie + User + Genres", RMSE = rmse4))
+results_table %>% knitr::kable()
+
+```
+Not surprisingly, the _Genres_ parameter also has a direct positive effect on our model, although it it worthwhile to note that, the reduction in RMSE value is significantly lower for the 4th model, as compared to the 3rd or second. This could only imply that while including the _Genres_ parameter may have reduced our RMSE thereby improving the model, the improvement is marginally less. Hence to further move towards our targetted RMSE (0.86490), we will use a bit of regularization using the existing tested parameters ( _movieId_, _userId_, _Genres_) and find the RMSE of the regularized model.      
+
+In order to create a regularized model, we first need a tuning parameter. Tuning is the process of maximizing a model's performance without overfitting or creating too high of a variance. Therefore this tuning parameter, represented by $\lambda$, will shrink data points towards the mean, thus reducing penalty effects on our model. We will take a random sample of numbers from 0 to 10, spaced out by intervals of 0.2, and find our optimized $\lambda$ which we can use for regularization.    
+
+```{r, message=FALSE, warning=FALSE, echo= FALSE}
+lambdas <- seq(0,10,0.20)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(edx_train_set$rating)
+  
+  b_m <- edx_train_set %>%
+    group_by(movieId) %>%
+    summarise(b_m = sum(rating - mu)/(n()+l))
+  
+  b_u <- edx_train_set %>% 
+    left_join(b_m, by="movieId") %>%
+    group_by(userId) %>%
+    summarise(b_u = sum(rating - mu - b_m)/(n()+l))
+  
+  b_g <- edx_train_set %>%
+        left_join(b_m, by="movieId") %>%
+        left_join(b_u, by ="userId") %>%
+        group_by(genres) %>%
+        summarise(b_g = sum(rating - mu - b_m - b_u)/(n()+l))
+  
+  predicted_ratings <- edx_test_set %>% 
+    left_join(b_m, by = "movieId") %>%
+    left_join(b_u, by =  "userId") %>%
+    left_join(b_g, by = "genres") %>%
+    mutate(reg_pred = mu + b_m + b_u + b_g) %>%
+    pull(reg_pred)
+  return(RMSE(predicted_ratings, edx_test_set$rating, na.rm = TRUE))
+})
+
+rmse5 <- min(rmses)
+results_table <- results_table %>% bind_rows(tibble(Model = "Regularized model", RMSE = rmse5))
+
+#the following line below was executed to fix a minor bug in copying contents into the results_table
+results_table <- results_table[-c(6,7,8,9),]
+
+results_table %>% knitr::kable()
+
+```
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+results_table <- results_table[-6,]
+results_table %>% knitr::kable()
+
+```
+
+
+This is how the RMSE value changes with respect to our lambda values:    
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+qplot(rmses, lambdas)
+
+
+```
+From regularization, we obtained the optimal lambda corresponding to the smallest RMSE value (0.86809) and found it to be 4.75. This value is our tuning parameter, which we will use for further improving our model.  
+
+So far we had built our model on just a portion of the edx dataset; the _train_ set. We will now train our regularized model on the entire edx set, to see how it performs.  
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+lambda <- lambdas[which.min(rmses)]
+mu_edx <- mean(edx$rating)
+b_m_edx <- edx %>%
+       group_by(movieId) %>%
+       summarise(b_m = sum(rating - mu_edx)/(n()+ lambda))
+
+b_u_edx <- edx %>%
+           left_join(b_m_edx, by = "movieId") %>%
+           group_by(userId) %>%
+           summarise(b_u = sum(rating - mu_edx - b_m)/(n() + lambda))
+
+b_g_edx <- edx %>%
+           left_join(b_m_edx, by = "movieId") %>%
+           left_join(b_u_edx, by = "userId") %>%
+           group_by(genres) %>%
+           summarise(b_g = sum(rating - mu_edx - b_m - b_u)/(n()+lambda))
+
+
+```
+We obtain __edx__ specific parameters; our optimized parameters, and use it to test the final accuracy of our model, using the final hold-out set, also called the __validation__ set, which comprises 10% of the Movielens dataset.    
+
+\newpage
+
+# __Final Results__  
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+
+pred_validation <- validation %>%
+                  left_join(b_m_edx, by = "movieId") %>%
+                  left_join(b_u_edx, by = "userId") %>%
+                  left_join(b_g_edx, by = "genres") %>%
+                  mutate(value = mu_edx + b_m + b_u + b_g) %>%
+                  pull(value)
+
+final_rmse <- RMSE(pred_validation, validation$rating)
+options(pillar.sigfig = 7)
+results_table <- results_table %>% bind_rows(tibble(Model = "Final Model", RMSE = final_rmse))
+results_table %>% knitr::kable()
+
+```
+Our final RMSE comes to 0.8644510, which is a little less than the targetted RMSE (0.86490), thus concluding our model's targetted accuracy.  
+
+\newpage
+
+# __Conclusions__  
+The built movie recommendation system used 3 parameters directly from the __edx__ dataset, to build the algorithm; namely, _movieId_, _userId_ and _Genres_. An additional parameter called the _timestamp_, which gives information about the date of release of the movie, was also initially fit into the model, but it increased the RMSE to over 1.06, thus showing a negative impact on our model. Hence this parameter was removed. It can be observed from the final results table that the _movieId_ individually seems to have the highest impact on our model, followed by _userId_, followed by _Genres_. While initially building the algorithm, it was observed that taking _movieId_ as the first parameter and later adding _userId_ and _Genres_ seemed to have the highest positive impact on the model, as other combinations of the same parameters did not show significant reduction in RMSE. Regularization only marginally improved our model. The targetted RMSE could be achieved only when the regularized model was fitted on the entire __edx__ dataset. This model can further be improved by fitting different algorithms and trying out other various machine learning methods and techniques; but the author would like to conclude this report with the obtained final model to stay on par with the requirements of this project.  
+\newpage
+
+# __References__    
+$[1]$  https://www.edx.org/course/data-science-machine-learning  
+$[2]$  http://blog.echen.me/2011/10/24/winning-the-netflix-prize-a-summary/  
+$[3]$  https://www.analyticsvidhya.com/blog/2020/11/create-your-own-movie-movie-recommendation-system/#h2_4  
+$[4]$  https://www.geeksforgeeks.org/root-mean-square-error-in-r-programming/  
+$[5]$  https://rpruim.github.io/s341/S19/from-class/MathinRmd.html  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
